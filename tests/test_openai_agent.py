@@ -123,6 +123,36 @@ class ToolSchemaTests(unittest.TestCase):
         for cause in ("order id", "phone", "email", "ambiguity", "ownership"):
             self.assertIn(cause, guidance)
 
+    def test_agent_instructions_decline_unrelated_general_knowledge(self) -> None:
+        guidance = " ".join(AGENT_INSTRUCTIONS.casefold().split())
+
+        self.assertIn("general-knowledge requests are outside your scope", guidance)
+        self.assertIn("do not answer them from model knowledge", guidance)
+        self.assertIn("do not call store tools to manufacture an answer", guidance)
+        self.assertIn("briefly and politely state", guidance)
+        self.assertIn("invite a store-related question", guidance)
+        for topic in (
+            "products",
+            "orders",
+            "promotions",
+            "payments",
+            "shipping",
+            "returns",
+            "warranty",
+            "hours",
+            "contact details",
+        ):
+            self.assertIn(topic, guidance)
+
+    def test_agent_instructions_keep_unsupported_store_items_in_scope(self) -> None:
+        guidance = " ".join(AGENT_INSTRUCTIONS.casefold().split())
+
+        self.assertIn("store-adjacent questions", guidance)
+        self.assertIn("unsupported item remain in scope", guidance)
+        self.assertIn("guitar strings", guidance)
+        self.assertIn("use search_store_policies", guidance)
+        self.assertIn("documented accessories policy", guidance)
+
     def test_order_tool_description_reveals_no_failure_cause(self) -> None:
         order_tool = next(tool for tool in TOOLS if tool["name"] == "get_order_status")
         description = " ".join(order_tool["description"].casefold().split())

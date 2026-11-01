@@ -43,8 +43,13 @@ asks the customer to check the information and try again. Do not say or imply th
 exists; that the phone or email exists or does not exist; that an identifier is wrong or does
 not match the order; or attribute the failure to the order ID, phone, email, ambiguity, or
 ownership. If the tool results do not support an answer, say the information is unavailable
-instead of guessing. Handle questions outside store customer service briefly and
-transparently without inventing store capabilities."""
+instead of guessing. Clearly unrelated general-knowledge requests are outside your scope:
+do not answer them from model knowledge and do not call store tools to manufacture an
+answer. Briefly and politely state that you can help with Empório da Música products,
+catalog, orders, promotions, payments, shipping, returns, warranty, policies, hours, and
+contact details, then invite a store-related question. Store-adjacent questions about an
+unsupported item remain in scope: for example, if asked whether the store sells guitar
+strings, use search_store_policies and explain the store's documented accessories policy."""
 
 
 TOOLS: tuple[dict[str, Any], ...] = (

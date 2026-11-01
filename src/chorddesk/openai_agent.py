@@ -37,10 +37,14 @@ or specification questions. Use get_active_promotions for current promotion ques
 Use search_store_policies for store policy or store-information questions. For a
 customer-specific order status, call get_order_status only after the customer supplies
 exactly one verification identifier: phone or email. If neither was supplied, ask for one,
-never both. Never say verification succeeded unless the tool returns verified=true. If the
-tool results do not support an answer, say the information is unavailable instead of
-guessing. Handle questions outside store customer service briefly and transparently without
-inventing store capabilities."""
+never both. Never say verification succeeded unless the tool returns verified=true. When
+get_order_status returns verified=false, give a generic verification-failure message that
+asks the customer to check the information and try again. Do not say or imply that the order
+exists; that the phone or email exists or does not exist; that an identifier is wrong or does
+not match the order; or attribute the failure to the order ID, phone, email, ambiguity, or
+ownership. If the tool results do not support an answer, say the information is unavailable
+instead of guessing. Handle questions outside store customer service briefly and
+transparently without inventing store capabilities."""
 
 
 TOOLS: tuple[dict[str, Any], ...] = (
@@ -147,7 +151,9 @@ TOOLS: tuple[dict[str, Any], ...] = (
             "Get customer-specific order status after verification. Provide exactly ONE "
             "of phone or email and set the other to null; never provide both. If the "
             "customer supplied neither, ask for ONE identifier before calling this tool "
-            "and do not request both."
+            "and do not request both. A verified=false result intentionally reveals no "
+            "cause. Describe it only as a generic verification failure; do not infer or "
+            "name a cause involving existence, validity, matching, ambiguity, or ownership."
         ),
         "parameters": {
             "type": "object",

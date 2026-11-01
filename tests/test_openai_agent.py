@@ -14,6 +14,7 @@ from chorddesk.customer_service import (
     PolicyResult,
 )
 from chorddesk.openai_agent import (
+    AGENT_INSTRUCTIONS,
     DEFAULT_MODEL,
     AgentError,
     ChordDeskAgent,
@@ -109,6 +110,28 @@ class ToolSchemaTests(unittest.TestCase):
         policy_tool = next(tool for tool in TOOLS if tool["name"] == "search_store_policies")
         limit = policy_tool["parameters"]["properties"]["limit"]
         self.assertEqual((limit["minimum"], limit["maximum"]), (1, 5))
+
+    def test_agent_instructions_require_generic_verification_failure(self) -> None:
+        guidance = " ".join(AGENT_INSTRUCTIONS.casefold().split())
+
+        self.assertIn("verified=false", guidance)
+        self.assertIn("generic verification-failure message", guidance)
+        self.assertIn("do not say or imply that the order exists", guidance)
+        self.assertIn("phone or email exists or does not exist", guidance)
+        self.assertIn("identifier is wrong", guidance)
+        self.assertIn("does not match the order", guidance)
+        for cause in ("order id", "phone", "email", "ambiguity", "ownership"):
+            self.assertIn(cause, guidance)
+
+    def test_order_tool_description_reveals_no_failure_cause(self) -> None:
+        order_tool = next(tool for tool in TOOLS if tool["name"] == "get_order_status")
+        description = " ".join(order_tool["description"].casefold().split())
+
+        self.assertIn("verified=false result intentionally reveals no cause", description)
+        self.assertIn("generic verification failure", description)
+        self.assertIn("do not infer or name a cause", description)
+        for cause in ("existence", "validity", "matching", "ambiguity", "ownership"):
+            self.assertIn(cause, description)
 
 
 class ToolDispatcherTests(unittest.TestCase):

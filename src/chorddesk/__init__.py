@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from chorddesk!")
+"""ChordDesk customer-service application."""

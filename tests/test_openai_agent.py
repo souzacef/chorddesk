@@ -17,6 +17,7 @@ from chorddesk.openai_agent import (
     DEFAULT_MODEL,
     AgentError,
     ChordDeskAgent,
+    ConversationSession,
     TOOLS,
     ToolDispatcher,
     ToolProtocolError,
@@ -289,7 +290,7 @@ def response(*output: object, text: str = "") -> SimpleNamespace:
 
 
 class FakeResponses:
-    def __init__(self, queued: list[SimpleNamespace]) -> None:
+    def __init__(self, queued: list[SimpleNamespace | Exception]) -> None:
         self.queued = list(queued)
         self.requests: list[dict[str, object]] = []
 
@@ -297,11 +298,14 @@ class FakeResponses:
         request = dict(kwargs)
         request["input"] = list(request["input"])  # type: ignore[arg-type]
         self.requests.append(request)
-        return self.queued.pop(0)
+        result = self.queued.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class FakeClient:
-    def __init__(self, *queued: SimpleNamespace) -> None:
+    def __init__(self, *queued: SimpleNamespace | Exception) -> None:
         self.responses = FakeResponses(list(queued))
 
 
@@ -435,6 +439,184 @@ class AgentOrchestrationTests(unittest.TestCase):
                 client = FakeClient(SimpleNamespace(output=[], output_text=text))
                 with self.assertRaisesRegex(AgentError, "usable output text"):
                     ChordDeskAgent(client, FakeDispatcher()).respond("Pergunta")
+
+
+class ConversationSessionTests(unittest.TestCase):
+    def test_agent_respond_remains_stateless_between_calls(self) -> None:
+        first_message = SimpleNamespace(type="message", id="message-1")
+        second_message = SimpleNamespace(type="message", id="message-2")
+        client = FakeClient(
+            response(first_message, text="Primeira"),
+            response(second_message, text="Segunda"),
+        )
+        agent = ChordDeskAgent(client, FakeDispatcher())
+
+        self.assertEqual(agent.respond("Um"), "Primeira")
+        self.assertEqual(agent.respond("Dois"), "Segunda")
+
+        self.assertEqual(
+            client.responses.requests[0]["input"],
+            [{"role": "user", "content": "Um"}],
+        )
+        self.assertEqual(
+            client.responses.requests[1]["input"],
+            [{"role": "user", "content": "Dois"}],
+        )
+
+    def test_session_replays_complete_history_and_accumulates_new_tool_turn(
+        self,
+    ) -> None:
+        reasoning_1 = SimpleNamespace(type="reasoning", id="reasoning-1")
+        call_1 = function_call("call-1", "search_products")
+        intermediate_message = SimpleNamespace(type="message", id="message-middle")
+        final_message_1 = SimpleNamespace(type="message", id="message-final-1")
+        reasoning_2 = SimpleNamespace(type="reasoning", id="reasoning-2")
+        call_2 = function_call("call-2", "get_order_status")
+        final_message_2 = SimpleNamespace(type="message", id="message-final-2")
+        client = FakeClient(
+            response(reasoning_1, call_1, intermediate_message),
+            response(final_message_1, text="Informe seu telefone."),
+            response(reasoning_2, call_2),
+            response(final_message_2, text="Pedido enviado."),
+        )
+        dispatcher = FakeDispatcher()
+        session = ConversationSession(ChordDeskAgent(client, dispatcher))
+
+        self.assertEqual(session.respond("Onde está o pedido 101?"), "Informe seu telefone.")
+        first_history = session.history
+        self.assertIsInstance(first_history, tuple)
+        self.assertEqual(
+            first_history,
+            (
+                {"role": "user", "content": "Onde está o pedido 101?"},
+                reasoning_1,
+                call_1,
+                intermediate_message,
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-1",
+                    "output": '{"called": "search_products"}',
+                },
+                final_message_1,
+            ),
+        )
+
+        self.assertEqual(session.respond("11999999999"), "Pedido enviado.")
+
+        second_turn_input = client.responses.requests[2]["input"]
+        self.assertEqual(second_turn_input[:-1], list(first_history))  # type: ignore[index]
+        self.assertEqual(
+            second_turn_input[-1],  # type: ignore[index]
+            {"role": "user", "content": "11999999999"},
+        )
+        self.assertEqual(
+            dispatcher.calls,
+            [("search_products", "{}"), ("get_order_status", "{}")],
+        )
+        self.assertEqual(session.history[: len(first_history)], first_history)
+        self.assertEqual(
+            session.history[len(first_history)],
+            {"role": "user", "content": "11999999999"},
+        )
+        self.assertIn(reasoning_2, session.history)
+        self.assertIn(call_2, session.history)
+        self.assertIn(final_message_2, session.history)
+        self.assertTrue(
+            any(
+                isinstance(item, dict)
+                and item.get("type") == "function_call_output"
+                and item.get("call_id") == "call-2"
+                for item in session.history
+            )
+        )
+        for request in client.responses.requests:
+            self.assertIs(request["store"], False)
+            self.assertNotIn("previous_response_id", request)
+            self.assertNotIn("temperature", request)
+            self.assertNotIn("top_p", request)
+
+    def test_three_user_turns_accumulate_in_chronological_order(self) -> None:
+        client = FakeClient(
+            response(SimpleNamespace(type="message", id="one"), text="1"),
+            response(SimpleNamespace(type="message", id="two"), text="2"),
+            response(SimpleNamespace(type="message", id="three"), text="3"),
+        )
+        session = ConversationSession(ChordDeskAgent(client, FakeDispatcher()))
+
+        for message in ("primeira", "segunda", "terceira"):
+            session.respond(message)
+
+        user_messages = [
+            item["content"]
+            for item in session.history
+            if isinstance(item, dict) and item.get("role") == "user"
+        ]
+        self.assertEqual(user_messages, ["primeira", "segunda", "terceira"])
+
+    def test_reset_clears_history_without_network_and_next_turn_is_fresh(self) -> None:
+        client = FakeClient(
+            response(SimpleNamespace(type="message", id="before"), text="Antes"),
+            response(SimpleNamespace(type="message", id="after"), text="Depois"),
+        )
+        session = ConversationSession(ChordDeskAgent(client, FakeDispatcher()))
+        session.respond("Primeira")
+        request_count = len(client.responses.requests)
+
+        session.reset()
+
+        self.assertEqual(session.history, ())
+        self.assertEqual(len(client.responses.requests), request_count)
+        session.respond("Nova")
+        self.assertEqual(
+            client.responses.requests[-1]["input"],
+            [{"role": "user", "content": "Nova"}],
+        )
+
+    def test_client_failure_does_not_mutate_committed_history(self) -> None:
+        client = FakeClient(
+            response(SimpleNamespace(type="message", id="ok"), text="Certo"),
+            RuntimeError("client failed"),
+        )
+        session = ConversationSession(ChordDeskAgent(client, FakeDispatcher()))
+        session.respond("Primeira")
+        committed = session.history
+
+        with self.assertRaisesRegex(RuntimeError, "client failed"):
+            session.respond("Segunda")
+
+        self.assertIs(session.history, committed)
+
+    def test_maximum_tool_round_failure_does_not_mutate_history(self) -> None:
+        client = FakeClient(
+            response(SimpleNamespace(type="message", id="ok"), text="Certo"),
+            response(function_call("call-1")),
+            response(function_call("call-2")),
+        )
+        session = ConversationSession(
+            ChordDeskAgent(client, FakeDispatcher(), max_tool_rounds=1)
+        )
+        session.respond("Primeira")
+        committed = session.history
+
+        with self.assertRaisesRegex(AgentError, "maximum tool rounds"):
+            session.respond("Segunda")
+
+        self.assertIs(session.history, committed)
+
+    def test_blank_message_does_not_mutate_history_or_call_client(self) -> None:
+        client = FakeClient(
+            response(SimpleNamespace(type="message", id="ok"), text="Certo")
+        )
+        session = ConversationSession(ChordDeskAgent(client, FakeDispatcher()))
+        session.respond("Primeira")
+        committed = session.history
+        request_count = len(client.responses.requests)
+
+        with self.assertRaisesRegex(ValueError, "must not be blank"):
+            session.respond("   ")
+
+        self.assertIs(session.history, committed)
+        self.assertEqual(len(client.responses.requests), request_count)
 
 
 if __name__ == "__main__":

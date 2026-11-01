@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from enum import Enum
@@ -440,6 +440,14 @@ class _Dispatcher(Protocol):
     def dispatch(self, name: str, arguments: str) -> str: ...
 
 
+@dataclass(frozen=True, slots=True)
+class AgentTurnResult:
+    """A completed turn and the local items needed to replay it."""
+
+    output_text: str
+    replayable_items: tuple[Any, ...]
+
+
 @dataclass(slots=True)
 class ChordDeskAgent:
     """Run one stateless customer turn through the Responses API."""
@@ -452,12 +460,20 @@ class ChordDeskAgent:
     instructions: str = AGENT_INSTRUCTIONS
 
     def respond(self, user_message: str) -> str:
+        """Run an independent turn without retaining cross-call state."""
+        return self.run_turn(user_message).output_text
+
+    def run_turn(
+        self, user_message: str, prior_items: tuple[Any, ...] = ()
+    ) -> AgentTurnResult:
+        """Run one turn using an explicit, locally replayable transcript."""
         if not user_message.strip():
             raise ValueError("user message must not be blank")
         if self.max_tool_rounds < 0:
             raise ValueError("max_tool_rounds cannot be negative")
 
-        local_input: list[Any] = [{"role": "user", "content": user_message}]
+        local_input = list(prior_items)
+        local_input.append({"role": "user", "content": user_message})
         completed_tool_rounds = 0
 
         while True:
@@ -482,7 +498,7 @@ class ChordDeskAgent:
                 output_text = getattr(response, "output_text", None)
                 if not isinstance(output_text, str) or not output_text.strip():
                     raise AgentError("final response did not contain usable output text")
-                return output_text
+                return AgentTurnResult(output_text, tuple(local_input))
 
             if completed_tool_rounds >= self.max_tool_rounds:
                 raise AgentError("maximum tool rounds exceeded")
@@ -506,3 +522,24 @@ class ChordDeskAgent:
                     }
                 )
             completed_tool_rounds += 1
+
+
+@dataclass(slots=True)
+class ConversationSession:
+    """Own an ephemeral local transcript for explicit multi-turn continuity."""
+
+    agent: ChordDeskAgent
+    _history: tuple[Any, ...] = field(default=(), init=False, repr=False)
+
+    @property
+    def history(self) -> tuple[Any, ...]:
+        """Return the committed replayable transcript as a read-only tuple."""
+        return self._history
+
+    def respond(self, user_message: str) -> str:
+        result = self.agent.run_turn(user_message, self._history)
+        self._history = result.replayable_items
+        return result.output_text
+
+    def reset(self) -> None:
+        self._history = ()

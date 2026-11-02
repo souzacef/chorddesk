@@ -6,8 +6,10 @@ import os
 import secrets
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from math import ceil
 from typing import Protocol
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -23,6 +25,12 @@ COOKIE_NAME = "chorddesk_session"
 SAFE_FAILURE_MESSAGE = "Não foi possível responder agora. Tente novamente em instantes."
 DEFAULT_SESSION_TTL_SECONDS = 60 * 60
 DEFAULT_MAX_SESSIONS = 512
+DEFAULT_MAX_MESSAGE_LENGTH = 2_000
+DEFAULT_PER_SESSION_CHAT_LIMIT = 8
+DEFAULT_GLOBAL_CHAT_LIMIT = 40
+DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60.0
+MESSAGE_TOO_LONG_DETAIL = "A mensagem deve ter no máximo 2.000 caracteres."
+RATE_LIMIT_DETAIL = "Muitas mensagens em pouco tempo. Tente novamente em instantes."
 
 
 class Session(Protocol):
@@ -52,6 +60,59 @@ class _SessionEntry:
     session: Session
     last_seen: float
     lock: threading.Lock = field(default_factory=threading.Lock)
+    chat_requests: deque[float] = field(default_factory=deque)
+
+
+class RollingWindowRateLimiter:
+    """Atomically enforce browser and process rolling-window chat quotas."""
+
+    def __init__(
+        self,
+        *,
+        per_session_limit: int = DEFAULT_PER_SESSION_CHAT_LIMIT,
+        global_limit: int = DEFAULT_GLOBAL_CHAT_LIMIT,
+        window_seconds: float = DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if per_session_limit <= 0:
+            raise ValueError("per_session_limit must be positive")
+        if global_limit <= 0:
+            raise ValueError("global_limit must be positive")
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be positive")
+        self._per_session_limit = per_session_limit
+        self._global_limit = global_limit
+        self._window_seconds = window_seconds
+        self._clock = clock
+        self._global_requests: deque[float] = deque()
+        self._lock = threading.Lock()
+
+    def record_or_retry_after(self, session_requests: deque[float]) -> int | None:
+        """Record an allowed request or return seconds until both limits permit it."""
+        with self._lock:
+            now = self._clock()
+            cutoff = now - self._window_seconds
+            self._prune(session_requests, cutoff)
+            self._prune(self._global_requests, cutoff)
+
+            retry_times = []
+            if len(session_requests) >= self._per_session_limit:
+                retry_times.append(session_requests[0] + self._window_seconds - now)
+            if len(self._global_requests) >= self._global_limit:
+                retry_times.append(
+                    self._global_requests[0] + self._window_seconds - now
+                )
+            if retry_times:
+                return max(1, ceil(max(retry_times)))
+
+            session_requests.append(now)
+            self._global_requests.append(now)
+            return None
+
+    @staticmethod
+    def _prune(requests: deque[float], cutoff: float) -> None:
+        while requests and requests[0] <= cutoff:
+            requests.popleft()
 
 
 class SessionRegistry:
@@ -121,9 +182,16 @@ def create_app(
     cookie_secure: bool | None = None,
     session_ttl_seconds: float = DEFAULT_SESSION_TTL_SECONDS,
     max_sessions: int = DEFAULT_MAX_SESSIONS,
+    max_message_length: int = DEFAULT_MAX_MESSAGE_LENGTH,
+    per_session_chat_limit: int = DEFAULT_PER_SESSION_CHAT_LIMIT,
+    global_chat_limit: int = DEFAULT_GLOBAL_CHAT_LIMIT,
+    rate_limit_window_seconds: float = DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
     environ: Mapping[str, str] = os.environ,
 ) -> FastAPI:
     """Create the web application with injectable offline-test boundaries."""
+    if max_message_length <= 0:
+        raise ValueError("max_message_length must be positive")
     if cookie_secure is None:
         cookie_secure = environ.get("CHORDDESK_COOKIE_SECURE", "").lower() in {
             "1",
@@ -135,6 +203,13 @@ def create_app(
         session_factory,
         ttl_seconds=session_ttl_seconds,
         max_sessions=max_sessions,
+        clock=clock,
+    )
+    rate_limiter = RollingWindowRateLimiter(
+        per_session_limit=per_session_chat_limit,
+        global_limit=global_chat_limit,
+        window_seconds=rate_limit_window_seconds,
+        clock=clock,
     )
     application = FastAPI(title="ChordDesk", docs_url=None, redoc_url=None)
 
@@ -151,6 +226,8 @@ def create_app(
         message = payload.message.strip()
         if not message:
             raise HTTPException(status_code=400, detail="A mensagem não pode estar vazia.")
+        if len(payload.message) > max_message_length:
+            raise HTTPException(status_code=413, detail=MESSAGE_TOO_LONG_DETAIL)
 
         response.headers["Cache-Control"] = "no-store"
         try:
@@ -159,6 +236,14 @@ def create_app(
             return ChatResponse(message=SAFE_FAILURE_MESSAGE)
         if created:
             _set_session_cookie(response, token, secure=cookie_secure)
+
+        retry_after = rate_limiter.record_or_retry_after(entry.chat_requests)
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail=RATE_LIMIT_DETAIL,
+                headers={"Retry-After": str(retry_after)},
+            )
 
         try:
             with entry.lock:

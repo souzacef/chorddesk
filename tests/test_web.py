@@ -6,7 +6,25 @@ from fastapi.testclient import TestClient
 from openai import OpenAIError
 
 from chorddesk.openai_agent import AgentError, ToolProtocolError
-from chorddesk.web import COOKIE_NAME, SAFE_FAILURE_MESSAGE, create_app
+from chorddesk.web import (
+    COOKIE_NAME,
+    DEFAULT_MAX_MESSAGE_LENGTH,
+    MESSAGE_TOO_LONG_DETAIL,
+    RATE_LIMIT_DETAIL,
+    SAFE_FAILURE_MESSAGE,
+    create_app,
+)
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.value = 1_000.0
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
 
 
 class FakeSession:
@@ -152,6 +170,161 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"message": SAFE_FAILURE_MESSAGE})
         self.assertNotIn("private API configuration details", response.text)
+
+
+class AbuseProtectionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.clock = FakeClock()
+        self.factory = FakeSessionFactory()
+
+    def make_client(
+        self,
+        *,
+        per_session_limit: int = 8,
+        global_limit: int = 40,
+    ) -> TestClient:
+        app = create_app(
+            session_factory=self.factory,
+            per_session_chat_limit=per_session_limit,
+            global_chat_limit=global_limit,
+            clock=self.clock,
+            environ={},
+        )
+        return TestClient(app)
+
+    def test_exactly_2000_characters_is_accepted(self) -> None:
+        client = self.make_client()
+        message = "a" * DEFAULT_MAX_MESSAGE_LENGTH
+
+        response = client.post("/api/chat", json={"message": message})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.factory.sessions[0].messages, [message])
+
+    def test_2001_characters_is_rejected_without_calling_session(self) -> None:
+        client = self.make_client()
+
+        response = client.post(
+            "/api/chat",
+            json={"message": "a" * (DEFAULT_MAX_MESSAGE_LENGTH + 1)},
+        )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.json(), {"detail": MESSAGE_TOO_LONG_DETAIL})
+        self.assertEqual(self.factory.sessions, [])
+
+    def test_first_eight_requests_are_accepted_and_ninth_is_limited(self) -> None:
+        client = self.make_client()
+
+        for number in range(8):
+            response = client.post("/api/chat", json={"message": str(number)})
+            self.assertEqual(response.status_code, 200)
+
+        limited = client.post("/api/chat", json={"message": "nona"})
+
+        self.assertEqual(limited.status_code, 429)
+        self.assertEqual(limited.json(), {"detail": RATE_LIMIT_DETAIL})
+        self.assertEqual(limited.headers["retry-after"], "60")
+        self.assertEqual(len(self.factory.sessions[0].messages), 8)
+
+    def test_advancing_clock_past_window_permits_requests_again(self) -> None:
+        client = self.make_client(per_session_limit=1)
+        self.assertEqual(
+            client.post("/api/chat", json={"message": "uma"}).status_code,
+            200,
+        )
+        self.assertEqual(
+            client.post("/api/chat", json={"message": "duas"}).status_code,
+            429,
+        )
+
+        self.clock.advance(61)
+        response = client.post("/api/chat", json={"message": "três"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.factory.sessions[0].messages, ["uma", "três"])
+
+    def test_browser_sessions_have_independent_quotas(self) -> None:
+        shared_app = self.make_client(per_session_limit=1).app
+        first = TestClient(shared_app)
+        second = TestClient(shared_app)
+
+        self.assertEqual(
+            first.post("/api/chat", json={"message": "A"}).status_code,
+            200,
+        )
+        self.assertEqual(
+            first.post("/api/chat", json={"message": "A2"}).status_code,
+            429,
+        )
+        self.assertEqual(
+            second.post("/api/chat", json={"message": "B"}).status_code,
+            200,
+        )
+        self.assertEqual(
+            [session.messages for session in self.factory.sessions],
+            [["A"], ["B"]],
+        )
+
+    def test_process_quota_applies_across_browser_sessions(self) -> None:
+        shared_app = self.make_client(per_session_limit=10, global_limit=3).app
+        clients = [TestClient(shared_app) for _ in range(4)]
+
+        for number, client in enumerate(clients[:3]):
+            response = client.post("/api/chat", json={"message": str(number)})
+            self.assertEqual(response.status_code, 200)
+
+        limited = clients[3].post("/api/chat", json={"message": "bloqueada"})
+
+        self.assertEqual(limited.status_code, 429)
+        self.assertEqual(limited.headers["retry-after"], "60")
+        self.assertEqual(
+            sum(len(session.messages) for session in self.factory.sessions),
+            3,
+        )
+
+    def test_invalid_messages_do_not_consume_quota(self) -> None:
+        client = self.make_client(per_session_limit=1, global_limit=1)
+
+        blank = client.post("/api/chat", json={"message": "   "})
+        too_long = client.post(
+            "/api/chat",
+            json={"message": "a" * (DEFAULT_MAX_MESSAGE_LENGTH + 1)},
+        )
+        accepted = client.post("/api/chat", json={"message": "válida"})
+        limited = client.post("/api/chat", json={"message": "segunda"})
+
+        self.assertEqual(blank.status_code, 400)
+        self.assertEqual(too_long.status_code, 413)
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(limited.status_code, 429)
+        self.assertEqual(self.factory.sessions[0].messages, ["válida"])
+
+    def test_health_and_reset_do_not_consume_chat_quota(self) -> None:
+        client = self.make_client(per_session_limit=1, global_limit=1)
+
+        self.assertEqual(client.get("/").status_code, 200)
+        self.assertEqual(client.get("/health").status_code, 200)
+        self.assertEqual(client.post("/api/reset").status_code, 200)
+        accepted = client.post("/api/chat", json={"message": "válida"})
+        limited = client.post("/api/chat", json={"message": "segunda"})
+
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(limited.status_code, 429)
+        self.assertEqual(self.factory.sessions[0].messages, ["válida"])
+
+    def test_accepted_failed_request_consumes_quota(self) -> None:
+        client = self.make_client(per_session_limit=1, global_limit=1)
+        client.post("/api/reset")
+        self.factory.sessions[0].failure = OpenAIError("private API details")
+
+        failed = client.post("/api/chat", json={"message": "primeira"})
+        limited = client.post("/api/chat", json={"message": "segunda"})
+
+        self.assertEqual(failed.status_code, 200)
+        self.assertEqual(failed.json(), {"message": SAFE_FAILURE_MESSAGE})
+        self.assertEqual(limited.status_code, 429)
+        self.assertEqual(self.factory.sessions[0].messages, ["primeira"])
 
 
 if __name__ == "__main__":

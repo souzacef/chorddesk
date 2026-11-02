@@ -7,7 +7,9 @@ Música**. It combines the OpenAI Responses API with deterministic application
 services for catalog search, promotions, store policies, and privacy-safe order
 status queries.
 
-**[Try the live demo](https://chorddesk.onrender.com)**
+## Live demo
+
+Visit [chorddesk.onrender.com](https://chorddesk.onrender.com). After a period of inactivity, the service may take around a minute or occasionally longer to wake from a Render cold start. Once the page loads, the application is ready to use. AI responses depend on OpenAI API availability and quota.
 
 The central design principle is a strict separation of responsibilities: the
 LLM handles natural-language conversation and tool orchestration, while Python

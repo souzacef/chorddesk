@@ -87,6 +87,7 @@ class WebTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('id="theme"', response.text)
+        self.assertIn('<span class="theme-label">Tema</span>', response.text)
         self.assertIn('aria-label="Tema de cores"', response.text)
         self.assertIn('<option value="system">Sistema</option>', response.text)
         self.assertIn('<option value="light">Claro</option>', response.text)

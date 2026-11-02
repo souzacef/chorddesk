@@ -314,7 +314,6 @@ _INDEX_HTML = """<!doctype html>
     :root { color-scheme: light; --ink: #22251f; --muted: #6b7067; --paper: #f5f4ef; --card: #fff; --line: #dedfd7; --accent: #315b48; --soft: #e8efe9; --control-bg: transparent; --control-text: #50564e; --suggestion-bg: #fafaf7; --input-bg: #fff; --customer-text: #fff; --focus: #9bb7a8; --error: #8c3129; --shadow: rgba(36, 42, 34, .06); }
     :root[data-theme="dark"] { color-scheme: dark; --ink: #edf1eb; --muted: #aeb8af; --paper: #141a16; --card: #1c241f; --line: #3b473f; --accent: #46785f; --soft: #29362e; --control-bg: #222b25; --control-text: #d5ddd5; --suggestion-bg: #222b25; --input-bg: #202823; --customer-text: #fff; --focus: #73aa8e; --error: #ff9d93; --shadow: rgba(0, 0, 0, .28); }
     * { box-sizing: border-box; }
-    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     body { margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { width: min(820px, 100%); min-height: 100vh; margin: 0 auto; padding: 32px 20px; display: flex; flex-direction: column; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
@@ -322,6 +321,8 @@ _INDEX_HTML = """<!doctype html>
     .store { margin: 2px 0 0; color: var(--muted); font-size: .94rem; }
     button { font: inherit; cursor: pointer; }
     .header-actions { display: flex; align-items: center; gap: 8px; }
+    .theme-field { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: .9rem; }
+    .theme-label { white-space: nowrap; }
     .reset, .theme-select { border: 1px solid var(--line); border-radius: 9px; background: var(--control-bg); color: var(--control-text); }
     .reset { padding: 8px 12px; }
     .theme-select { min-height: 39px; padding: 7px 28px 7px 10px; font: inherit; font-size: .9rem; }
@@ -347,8 +348,8 @@ _INDEX_HTML = """<!doctype html>
     <header>
       <div><h1>ChordDesk</h1><p class="store">Empório da Música</p></div>
       <div class="header-actions">
-        <label>
-          <span class="visually-hidden">Tema de cores</span>
+        <label class="theme-field">
+          <span class="theme-label">Tema</span>
           <select class="theme-select" id="theme" aria-label="Tema de cores">
             <option value="system">Sistema</option>
             <option value="light">Claro</option>

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -49,9 +51,18 @@ def build_session(
     data_dir: Path | None = None,
     *,
     client: Any | None = None,
+    environ: Mapping[str, str] = os.environ,
 ) -> ConversationSession:
     """Build the complete application graph without issuing an API request."""
-    source_dir = Path(data_dir) if data_dir is not None else repository_data_dir()
+    if data_dir is not None:
+        source_dir = Path(data_dir)
+    else:
+        configured_data_dir = environ.get("CHORDDESK_DATA_DIR", "").strip()
+        source_dir = (
+            Path(configured_data_dir)
+            if configured_data_dir
+            else repository_data_dir()
+        )
     paths = _required_paths(source_dir)
 
     catalog = Catalog.from_csv(paths[CATEGORIES_FILE], paths[PRODUCTS_FILE])

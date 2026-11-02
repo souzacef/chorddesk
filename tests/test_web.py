@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from openai import OpenAIError
@@ -14,6 +18,9 @@ from chorddesk.web import (
     SAFE_FAILURE_MESSAGE,
     create_app,
 )
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeClock:
@@ -81,6 +88,31 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
         self.assertEqual(self.factory.sessions, [])
+
+    def test_production_app_import_and_health_need_no_openai_key(self) -> None:
+        environ = dict(os.environ)
+        environ.pop("OPENAI_API_KEY", None)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from fastapi.testclient import TestClient; "
+                    "from chorddesk.web import app; "
+                    "response = TestClient(app).get('/health'); "
+                    "assert response.status_code == 200; "
+                    "assert response.json() == {'status': 'ok'}"
+                ),
+            ],
+            cwd=PROJECT_ROOT,
+            env=environ,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_blank_chat_request_is_rejected_without_a_session(self) -> None:
         response = self.client.post("/api/chat", json={"message": "  \n "})

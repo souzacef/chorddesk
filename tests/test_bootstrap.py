@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from chorddesk.bootstrap import MissingDataFileError, build_session
+from chorddesk.bootstrap import (
+    MissingDataFileError,
+    build_session,
+    repository_data_dir,
+)
 from chorddesk.customer_service import OrderStatusService, PolicyService
 from chorddesk.openai_agent import ChordDeskAgent, ConversationSession, ToolDispatcher
 from chorddesk.storefront import StorefrontService
@@ -17,7 +23,63 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 class BootstrapTests(unittest.TestCase):
     def test_default_data_directory_resolves_repository_data(self) -> None:
-        session = build_session(client=Mock())
+        session = build_session(client=Mock(), environ={})
+
+        self.assertEqual(repository_data_dir(), DATA_DIR)
+        self.assertIsInstance(session, ConversationSession)
+
+    def test_environment_data_directory_overrides_repository_default(self) -> None:
+        session = build_session(
+            client=Mock(),
+            environ={"CHORDDESK_DATA_DIR": str(DATA_DIR)},
+        )
+
+        self.assertIsInstance(session, ConversationSession)
+
+    def test_relative_environment_data_directory_uses_working_directory(self) -> None:
+        relative_data_dir = os.path.relpath(DATA_DIR, Path.cwd())
+
+        session = build_session(
+            client=Mock(),
+            environ={"CHORDDESK_DATA_DIR": relative_data_dir},
+        )
+
+        self.assertIsInstance(session, ConversationSession)
+
+    def test_explicit_data_directory_overrides_environment(self) -> None:
+        session = build_session(
+            DATA_DIR,
+            client=Mock(),
+            environ={"CHORDDESK_DATA_DIR": "/missing/environment/data"},
+        )
+
+        self.assertIsInstance(session, ConversationSession)
+
+    def test_invalid_environment_data_directory_fails_clearly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing"
+            with self.assertRaisesRegex(
+                MissingDataFileError,
+                re.escape(f"data directory does not exist: {missing}"),
+            ):
+                build_session(
+                    client=Mock(),
+                    environ={"CHORDDESK_DATA_DIR": str(missing)},
+                )
+            with self.assertRaisesRegex(
+                MissingDataFileError,
+                "required data file.*categories.csv",
+            ):
+                build_session(
+                    client=Mock(),
+                    environ={"CHORDDESK_DATA_DIR": directory},
+                )
+
+    def test_blank_environment_data_directory_uses_repository_default(self) -> None:
+        session = build_session(
+            client=Mock(),
+            environ={"CHORDDESK_DATA_DIR": "  "},
+        )
 
         self.assertIsInstance(session, ConversationSession)
 

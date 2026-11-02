@@ -288,38 +288,75 @@ _INDEX_HTML = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ChordDesk · Empório da Música</title>
+  <script>
+    (() => {
+      const storageKey = 'chorddesk-theme';
+      const modes = ['system', 'light', 'dark'];
+      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+      let savedMode = null;
+      try { savedMode = localStorage.getItem(storageKey); } catch (_) {}
+      const initialMode = modes.includes(savedMode) ? savedMode : 'system';
+
+      function applyTheme(mode) {
+        const theme = mode === 'system' ? (systemTheme.matches ? 'dark' : 'light') : mode;
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+      }
+
+      window.chorddeskTheme = {storageKey, mode: initialMode, systemTheme, applyTheme};
+      applyTheme(initialMode);
+      systemTheme.addEventListener('change', () => {
+        if (window.chorddeskTheme.mode === 'system') applyTheme('system');
+      });
+    })();
+  </script>
   <style>
-    :root { color-scheme: light; --ink: #22251f; --muted: #6b7067; --paper: #f5f4ef; --card: #fff; --line: #dedfd7; --accent: #315b48; --soft: #e8efe9; }
+    :root { color-scheme: light; --ink: #22251f; --muted: #6b7067; --paper: #f5f4ef; --card: #fff; --line: #dedfd7; --accent: #315b48; --soft: #e8efe9; --control-bg: transparent; --control-text: #50564e; --suggestion-bg: #fafaf7; --input-bg: #fff; --customer-text: #fff; --focus: #9bb7a8; --error: #8c3129; --shadow: rgba(36, 42, 34, .06); }
+    :root[data-theme="dark"] { color-scheme: dark; --ink: #edf1eb; --muted: #aeb8af; --paper: #141a16; --card: #1c241f; --line: #3b473f; --accent: #46785f; --soft: #29362e; --control-bg: #222b25; --control-text: #d5ddd5; --suggestion-bg: #222b25; --input-bg: #202823; --customer-text: #fff; --focus: #73aa8e; --error: #ff9d93; --shadow: rgba(0, 0, 0, .28); }
     * { box-sizing: border-box; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     body { margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { width: min(820px, 100%); min-height: 100vh; margin: 0 auto; padding: 32px 20px; display: flex; flex-direction: column; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
     h1 { margin: 0; font-size: clamp(1.65rem, 5vw, 2.25rem); letter-spacing: -.035em; }
     .store { margin: 2px 0 0; color: var(--muted); font-size: .94rem; }
     button { font: inherit; cursor: pointer; }
-    .reset { border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--muted); padding: 8px 12px; }
-    .panel { flex: 1; min-height: 480px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); box-shadow: 0 12px 32px rgba(36, 42, 34, .06); display: flex; flex-direction: column; overflow: hidden; }
+    .header-actions { display: flex; align-items: center; gap: 8px; }
+    .reset, .theme-select { border: 1px solid var(--line); border-radius: 9px; background: var(--control-bg); color: var(--control-text); }
+    .reset { padding: 8px 12px; }
+    .theme-select { min-height: 39px; padding: 7px 28px 7px 10px; font: inherit; font-size: .9rem; }
+    .panel { flex: 1; min-height: 480px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); box-shadow: 0 12px 32px var(--shadow); display: flex; flex-direction: column; overflow: hidden; }
     .messages { flex: 1; min-height: 300px; padding: 22px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
     .welcome { margin: auto; max-width: 500px; color: var(--muted); text-align: center; }
     .examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 18px; }
-    .example { border: 1px solid var(--line); border-radius: 999px; background: #fafaf7; color: #50564e; padding: 7px 11px; font-size: .86rem; }
+    .example { border: 1px solid var(--line); border-radius: 999px; background: var(--suggestion-bg); color: var(--control-text); padding: 7px 11px; font-size: .86rem; }
     .message { max-width: 82%; padding: 10px 13px; border-radius: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .customer { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+    .customer { align-self: flex-end; background: var(--accent); color: var(--customer-text); border-bottom-right-radius: 4px; }
     .assistant { align-self: flex-start; background: var(--soft); border-bottom-left-radius: 4px; }
     .composer { border-top: 1px solid var(--line); padding: 14px; display: flex; align-items: flex-end; gap: 10px; }
-    textarea { flex: 1; min-height: 46px; max-height: 140px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; color: var(--ink); background: #fff; font: inherit; }
-    textarea:focus { outline: 2px solid #9bb7a8; outline-offset: 1px; }
-    .send { min-height: 46px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; padding: 0 18px; font-weight: 650; }
-    button:disabled, textarea:disabled { cursor: wait; opacity: .58; }
-    .error { color: #8c3129; }
-    @media (max-width: 600px) { main { padding: 18px 12px; } .panel { min-height: calc(100vh - 112px); border-radius: 13px; } .messages { padding: 16px; } .message { max-width: 92%; } .composer { padding: 10px; } .send { padding: 0 14px; } }
+    textarea { flex: 1; min-height: 46px; max-height: 140px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; color: var(--ink); background: var(--input-bg); font: inherit; }
+    button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .send { min-height: 46px; border: 0; border-radius: 10px; background: var(--accent); color: var(--customer-text); padding: 0 18px; font-weight: 650; }
+    button:disabled, select:disabled, textarea:disabled { cursor: wait; opacity: .58; }
+    .error { color: var(--error); }
+    @media (max-width: 600px) { main { padding: 18px 12px; } header { align-items: flex-start; } .header-actions { flex-direction: column-reverse; align-items: stretch; } .panel { min-height: calc(100vh - 112px); border-radius: 13px; } .messages { padding: 16px; } .message { max-width: 92%; } .composer { padding: 10px; } .send { padding: 0 14px; } }
   </style>
 </head>
 <body>
   <main>
     <header>
       <div><h1>ChordDesk</h1><p class="store">Empório da Música</p></div>
-      <button class="reset" id="reset" type="button">Nova conversa</button>
+      <div class="header-actions">
+        <label>
+          <span class="visually-hidden">Tema de cores</span>
+          <select class="theme-select" id="theme" aria-label="Tema de cores">
+            <option value="system">Sistema</option>
+            <option value="light">Claro</option>
+            <option value="dark">Escuro</option>
+          </select>
+        </label>
+        <button class="reset" id="reset" type="button">Nova conversa</button>
+      </div>
     </header>
     <section class="panel" aria-label="Atendimento por chat">
       <div class="messages" id="messages" aria-live="polite">
@@ -345,6 +382,15 @@ _INDEX_HTML = """<!doctype html>
     const input = document.querySelector('#input');
     const send = document.querySelector('#send');
     const reset = document.querySelector('#reset');
+    const theme = document.querySelector('#theme');
+    const themeState = window.chorddeskTheme;
+
+    theme.value = themeState.mode;
+    theme.addEventListener('change', () => {
+      themeState.mode = theme.value;
+      try { localStorage.setItem(themeState.storageKey, theme.value); } catch (_) {}
+      themeState.applyTheme(theme.value);
+    });
 
     function addMessage(text, kind, extraClass = '') {
       welcome?.remove();

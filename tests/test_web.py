@@ -82,6 +82,22 @@ class WebTests(unittest.TestCase):
         self.assertNotIn("innerHTML", response.text)
         self.assertEqual(self.factory.sessions, [])
 
+    def test_index_contains_accessible_persistent_theme_selector(self) -> None:
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('id="theme"', response.text)
+        self.assertIn('aria-label="Tema de cores"', response.text)
+        self.assertIn('<option value="system">Sistema</option>', response.text)
+        self.assertIn('<option value="light">Claro</option>', response.text)
+        self.assertIn('<option value="dark">Escuro</option>', response.text)
+        self.assertIn("chorddesk-theme", response.text)
+        self.assertIn("localStorage.getItem", response.text)
+        self.assertIn("localStorage.setItem", response.text)
+        self.assertIn("prefers-color-scheme: dark", response.text)
+        self.assertIn("systemTheme.addEventListener('change'", response.text)
+        self.assertNotIn("innerHTML", response.text)
+
     def test_health_does_not_construct_a_session(self) -> None:
         response = self.client.get("/health")
 

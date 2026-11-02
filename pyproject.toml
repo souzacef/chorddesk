@@ -8,8 +8,15 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.120.0",
     "openai>=3.42.0",
     "pypdf>=6.21.4",
+    "uvicorn>=0.38.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
 ]
 
 [project.scripts]
